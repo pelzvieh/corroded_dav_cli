@@ -1,5 +1,5 @@
 use rustydav::client::Client;
-use rustydav::prelude::Error as DavError;
+use rustydav::prelude::{Response, Error as DavError};
 use std::str::SplitWhitespace;
 use std::io::{Write, BufWriter, BufReader, Error as IoError, ErrorKind};
 use url::{ParseError as ParseUrlError, Url};
@@ -55,7 +55,8 @@ impl DavCmdController {
             let path_str = Self::_next_arg(&mut args)?;
             let target_url = base_url.join(path_str.as_str())?;
             let file = std::fs::File::open(file_str)?;
-            self.dav_client.put(file, target_url.as_str())?;
+            let response = self.dav_client.put(file, target_url.as_str())?;
+            Self::_ensure_response_ok(&response);
             Ok(true)
         } else {
             Err(CmdControllerError::IllegalUse("Not initialised, you need to call connect before put"))
@@ -69,18 +70,11 @@ impl DavCmdController {
             let target_url = base_url.join(path_str.as_str())?;
             let file = std::fs::File::create(file_str)?;
             let mut response = self.dav_client.get(target_url.as_str())?;
-            if ! response.status().is_success() {
-                if let Err(dav_error) = response.error_for_status() {
-                    Err(CmdControllerError::from(dav_error))
-                } else {
-                    Err(CmdControllerError::from(IoError::new(ErrorKind::Other, "Error status returned without information")))
-                }
-            } else {
-                let mut buffer = BufWriter::new(file);
-                response.copy_to(&mut buffer)?;
-                buffer.flush()?;
-                Ok(true)
-            }
+            Self::_ensure_response_ok(&response);
+            let mut buffer = BufWriter::new(file);
+            response.copy_to(&mut buffer)?;
+            buffer.flush()?;
+            Ok(true)
         } else {
             Err(CmdControllerError::IllegalUse("Not initialised, you need to call connect before put"))
         }
@@ -91,6 +85,7 @@ impl DavCmdController {
             let path_str = Self::_next_arg(&mut args)?;
             let target_url = base_url.join(path_str.as_str())?;
             let response = self.dav_client.list(target_url.as_str(), "1")?;
+            Self::_ensure_response_ok(&response);
             let buf_reader = BufReader::new(response);
             let root = Element::from_reader(buf_reader).unwrap();
             root.write_to(&mut std::io::stdout())?;
@@ -113,6 +108,19 @@ impl DavCmdController {
             Err(CmdControllerError::IllegalUse("required argument missing"))
         }
     }
+    
+    fn _ensure_response_ok(response: &Response) -> Result<(), CmdControllerError> {
+        if ! response.status().is_success() {
+            if let Err(dav_error) = response.error_for_status_ref() {
+                Err(CmdControllerError::from(dav_error))
+            } else {
+                Err(CmdControllerError::from(IoError::new(ErrorKind::Other, "Error status returned without information")))
+            }
+        } else {
+            Ok(())
+        }
+    }
+    
     fn handle_command(&mut self, line: &String) {
         let mut words = line.split_whitespace();
     
