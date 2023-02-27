@@ -1,7 +1,7 @@
 use rustydav::client::Client;
 use rustydav::prelude::Error as DavError;
 use std::str::SplitWhitespace;
-use std::io::{Write, BufWriter, BufReader, Error as IoError};
+use std::io::{Write, BufWriter, BufReader, Error as IoError, ErrorKind};
 use url::{ParseError as ParseUrlError, Url};
 use rustyline;
 use minidom::{Element, Error as DomError};
@@ -69,10 +69,18 @@ impl DavCmdController {
             let target_url = base_url.join(path_str.as_str())?;
             let file = std::fs::File::create(file_str)?;
             let mut response = self.dav_client.get(target_url.as_str())?;
-            let mut buffer = BufWriter::new(file);
-            response.copy_to(&mut buffer)?;
-            buffer.flush()?;
-            Ok(true)
+            if ! response.status().is_success() {
+                if let Err(dav_error) = response.error_for_status() {
+                    Err(CmdControllerError::from(dav_error))
+                } else {
+                    Err(CmdControllerError::from(IoError::new(ErrorKind::Other, "Error status returned without information")))
+                }
+            } else {
+                let mut buffer = BufWriter::new(file);
+                response.copy_to(&mut buffer)?;
+                buffer.flush()?;
+                Ok(true)
+            }
         } else {
             Err(CmdControllerError::IllegalUse("Not initialised, you need to call connect before put"))
         }
