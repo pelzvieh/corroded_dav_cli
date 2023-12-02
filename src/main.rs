@@ -6,6 +6,9 @@ use url::{ParseError as ParseUrlError, Url};
 use rustyline;
 use minidom::{Element, Error as DomError};
 use derive_more::{Display, From};
+use dateparser::DateTimeUtc;
+use chrono::DateTime;
+use chrono::offset::Utc;
 
 #[derive(Debug, Display, From)]
 pub enum CmdControllerError {
@@ -23,6 +26,18 @@ struct DavCmdController {
     dav_client: Client,
     base_url: Option<Url>,
     running: bool
+}
+
+macro_rules! extract_property {
+        ($target:ident,$element_name:expr, $namespace_name:expr,$prop:expr) => {
+            $target = match $prop.get_child($element_name, $namespace_name) {
+                    Some(size_node) => match size_node.text().as_str().parse() {
+                        Ok(size) => Some(size),
+                        Err(_) => None
+                    },
+                    None => None
+                };
+        }
 }
 
 impl DavCmdController {
@@ -56,7 +71,7 @@ impl DavCmdController {
             let target_url = base_url.join(path_str.as_str())?;
             let file = std::fs::File::open(file_str)?;
             let response = self.dav_client.put(file, target_url.as_str())?;
-            Self::_ensure_response_ok(&response);
+            Self::_ensure_response_ok(&response)?;
             Ok(true)
         } else {
             Err(CmdControllerError::IllegalUse("Not initialised, you need to call connect before put"))
@@ -70,7 +85,7 @@ impl DavCmdController {
             let target_url = base_url.join(path_str.as_str())?;
             let file = std::fs::File::create(file_str)?;
             let mut response = self.dav_client.get(target_url.as_str())?;
-            Self::_ensure_response_ok(&response);
+            Self::_ensure_response_ok(&response)?;
             let mut buffer = BufWriter::new(file);
             response.copy_to(&mut buffer)?;
             buffer.flush()?;
@@ -79,16 +94,46 @@ impl DavCmdController {
             Err(CmdControllerError::IllegalUse("Not initialised, you need to call connect before put"))
         }
     }
-    
+
+    fn _print_dav_response (&self, response: &Element) {
+        if !response.is("response", "DAV:") {
+            return;
+        }
+        let name: String = match response.get_child("href", "DAV:") {
+            Some(href_child) => href_child.text(),
+            None => String::from(".")
+        };
+        if let Some(propstat) = response.get_child("propstat", "DAV:") {
+            if let Some(prop) = propstat.get_child("prop", "DAV:") {
+                let size: Option<i64>;
+                extract_property!(size, "getcontentlength", "DAV:", prop);
+                let date: Option<DateTimeUtc>;
+                extract_property!(date, "getlastmodified", "DAV:", prop);
+                println!("{}\t{}\t{}", name, 
+                    match size {Some(wert) => wert.to_string(), None => "---".to_string()}, 
+                    match date {Some(DateTimeUtc(wert)) => wert.to_rfc3339(), None => "---".to_string()});
+            }
+        }
+    }
+
     fn cmd_ls(&self, mut args: SplitWhitespace) -> Result<bool, CmdControllerError> {
         if let Some(base_url) = &self.base_url {
             let path_str = Self::_next_arg(&mut args)?;
             let target_url = base_url.join(path_str.as_str())?;
             let response = self.dav_client.list(target_url.as_str(), "1")?;
-            Self::_ensure_response_ok(&response);
+            Self::_ensure_response_ok(&response)?;
             let buf_reader = BufReader::new(response);
-            let root = Element::from_reader(buf_reader).unwrap();
-            root.write_to(&mut std::io::stdout())?;
+            let root = Element::from_reader(buf_reader)?;
+            if !root.is("multistatus", "DAV:") {
+                return Err(CmdControllerError::IllegalUse("list command did not return multistatus"));
+            };
+            
+            //root.write_to(&mut std::io::stdout())?;
+            for content in root.children() {
+                if content.is("response", "DAV:") {
+                    self._print_dav_response (content);
+                }
+            }
             println!();
             Ok(true)
         } else {
