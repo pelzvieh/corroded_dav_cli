@@ -224,9 +224,10 @@ mod tests {
     use url::Url;
     use netrc::Netrc;
     use crate::filter::FilterCriteria;
+    use mktemp::Temp;
     
     const TESTSERVER_URL_STR: &str = "https://www.webdavserver.com/Usere30e1ee/";
-    
+        
     fn get_testserver_url() -> Url {
         Url::parse(TESTSERVER_URL_STR).unwrap()
     }
@@ -239,11 +240,90 @@ mod tests {
     #[test]
     fn test_ls () {
         let listing_result = get_davcontroller().ls(&get_testserver_url(), &FilterCriteria::match_all());
-        assert!(listing_result.is_ok());
+        assert!(listing_result.is_ok(), "Error is {}", listing_result.err().unwrap());
         let listing = listing_result.unwrap();
         assert_ne!(listing.len(), 0);
         let first_entry = &listing[0];
         assert!(first_entry.date.is_some());
         assert_ne!(first_entry.name.len(), 0);
     }
+    
+    #[test]
+    fn test_get () {
+        let notes_url = get_testserver_url().join("Notes.txt").unwrap();
+        let presentation_url = get_testserver_url().join("Presentation.key").unwrap();
+        let sources = vec!(
+            &notes_url,
+            &presentation_url
+        );
+        let tempdir = Temp::new_dir().unwrap();
+        let get_result = get_davcontroller().get(&sources, &tempdir);
+        for result in get_result {
+            assert!(result.is_ok(), "Error is {}", result.err().unwrap());
+        }
+        let mut found_notes = false;
+        let mut found_presentation = false;
+        for list_result in tempdir.read_dir().unwrap() {
+            let file = list_result.unwrap();
+            let filename = file.file_name().to_string_lossy().into_owned();
+            match filename.as_str() {
+                "Notes.txt" => {found_notes = true;},
+                "Presentation.key" => {found_presentation = true;},
+                _ => {panic!("Get downloaded spurios file(s) {}", file.file_name().to_string_lossy());}
+            }
+            assert!(file.metadata().unwrap().len() > 0, "Content of file {} not downloaded", filename);
+        }
+        assert!(found_notes, "Notes.txt was not downloaded");
+        assert!(found_presentation, "Presentation.key was not downloaded");
+    }
+    
+    #[test]
+    fn test_file_lifecycle () {
+        let hello_url = get_testserver_url().join("hello%20world.txt").unwrap();
+
+        subtest_put(&hello_url);
+        subtest_ls_attr();
+        subtest_delete(&hello_url);
+        subtest_ls_attr_after_delete();
+    }
+
+    fn subtest_put (hello_url: &Url) {
+        let tempthing = Temp::new_file().unwrap();
+        let temppath = tempthing.as_path();
+        std::fs::write(temppath, "Hello world!\n").unwrap();
+        let sources = vec!(temppath);
+        let put_result = get_davcontroller().put(&sources, &hello_url);
+        for result in put_result {
+            assert!(result.is_ok(), "Error is {}", result.err().unwrap());
+        }
+    }
+    
+    fn subtest_ls_attr () {
+        let dav_controller = get_davcontroller();
+        let filter_type = FilterCriteria::new("text/plain", "*", "*", "*", "*").unwrap();
+        let filter_size = FilterCriteria::new("*", "13", "13", "*", "*").unwrap();
+        let filter_modification = FilterCriteria::new("*", "*", "*", "2019-01-01T00:00:00+00:00", "2019-12-31T00:00:00+00:00").unwrap();
+        let mut listing_result = dav_controller.ls(&get_testserver_url(), &filter_type).unwrap();
+        assert_eq!(listing_result.len(), 2);
+        listing_result = dav_controller.ls(&get_testserver_url(), &filter_size).unwrap();
+        assert_eq!(listing_result.len(), 1);
+        listing_result = dav_controller.ls(&get_testserver_url(), &filter_modification).unwrap();
+        assert_eq!(listing_result.len(), 8);
+    }
+    
+    fn subtest_delete(hello_url: &Url) {
+        let delete_result = get_davcontroller().delete(&hello_url);
+        assert!(delete_result.is_ok(), "error is {}", delete_result.err().unwrap());
+    }
+    
+    fn subtest_ls_attr_after_delete () {
+        let dav_controller = get_davcontroller();
+        let filter_type = FilterCriteria::new("text/plain", "*", "*", "*", "*").unwrap();
+        let filter_size = FilterCriteria::new("*", "13", "13", "*", "*").unwrap();
+        let mut listing_result = dav_controller.ls(&get_testserver_url(), &filter_type).unwrap();
+        assert_eq!(listing_result.len(), 1);
+        listing_result = dav_controller.ls(&get_testserver_url(), &filter_size).unwrap();
+        assert_eq!(listing_result.len(), 0);
+    }
+
 }

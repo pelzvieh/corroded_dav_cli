@@ -9,7 +9,7 @@ use dateparser::DateTimeUtc;
 use minidom::Element;
 use url::Url;
 
-
+#[derive(Debug)]
 pub struct CatalogueInfo {
     pub url: Url,
     pub name: String,

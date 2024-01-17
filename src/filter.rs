@@ -79,6 +79,9 @@ impl FilterCriteria {
             if size < self.min_size.unwrap_or(0) {
                 return false;
             }
+        } else if self.max_size.is_some() || self.min_size.is_some() {
+            // attrs doesn't have a size attribute which is queried
+            return false;
         }
         if let Some(DateTimeUtc(creation_date)) = attrs.date {
             if creation_date < self.earliest_modification.unwrap_or(creation_date) {
@@ -87,6 +90,8 @@ impl FilterCriteria {
             if creation_date > self.latest_modification.unwrap_or(creation_date) {
                 return false;
             }
+        } else if self.earliest_modification.is_some() || self.latest_modification.is_some() {
+            return false;
         }
         if let Some(regex) = self.file_type.as_ref() {
             if let Some(file_type) = attrs.file_type.as_ref() {
